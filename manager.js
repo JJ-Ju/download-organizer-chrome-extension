@@ -86,8 +86,7 @@ function deferSuggestion(downloadItem, suggestFn) {
         : undefined;
     if (current) {
         suggestFn({
-            filename: current,
-            conflictAction: DEFAULT_CONFLICT_ACTION
+            filename: current
         });
     } else {
         console.warn('No existing filename found when deferring suggestion; falling back to default.', {
