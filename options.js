@@ -13,16 +13,27 @@ const DEFAULT_RULES = [
     { "description": "Organize everything else by date", "mime": ".*", "pattern": "other/${date:YYYY-MM-DD}/", "enabled": false }
 ];
 
+const DEFAULT_BLOCKLIST = [];
 
-var rulesets = undefined;
+function sanitizeBlocklist(list) {
+    if (!Array.isArray(list)) {
+        return [];
+    }
+    return list.map((pattern) => pattern && pattern.toString().trim()).filter((pattern) => typeof pattern === 'string' && pattern.length);
+}
 
-var storageData = await chrome.storage.local.get('rulesets');
-if (storageData.rulesets) {
-    rulesets = structuredClone(storageData.rulesets) || [];
+
+var rulesets = [];
+var blocklist = [];
+
+var storageData = await chrome.storage.local.get({ 'rulesets': null, 'blocklist': DEFAULT_BLOCKLIST });
+if (Array.isArray(storageData.rulesets)) {
+    rulesets = structuredClone(storageData.rulesets);
 } else {
     await resetRules();
     await renderRules();
 }
+blocklist = sanitizeBlocklist(storageData.blocklist);
 
 async function resetRules() {
     await chrome.storage.local.set({'rulesets': DEFAULT_RULES});
@@ -34,14 +45,37 @@ async function saveRules() {
 }
 
 async function syncRulesToCloud() {
-    await chrome.storage.sync.set({'config': {'rulesets': rulesets}});
+    await chrome.storage.sync.set({'config': {'rulesets': rulesets, 'blocklist': blocklist}});
 }
 
 async function syncRulesFromCloud() {
     var result = await chrome.storage.sync.get(['config']);
-    rulesets = result.config.rulesets;
-    await saveRules();
-    await renderRules();
+    if (result.config) {
+        if (Array.isArray(result.config.rulesets)) {
+            rulesets = structuredClone(result.config.rulesets);
+            await saveRules();
+            await renderRules();
+        }
+        if (Array.isArray(result.config.blocklist)) {
+            blocklist = sanitizeBlocklist(result.config.blocklist);
+            await saveBlocklist();
+            renderBlocklist();
+        }
+    }
+}
+
+async function saveBlocklist() {
+    await chrome.storage.local.set({'blocklist': blocklist});
+}
+
+function renderBlocklist() {
+    var $textarea = $('#blocklist-patterns');
+    if (!$textarea.length) {
+        return;
+    }
+    $textarea.val(blocklist.join('\n'));
+    $('#blocklist-count').text(blocklist.length);
+    $('#blocklist-empty-hint').toggle(!blocklist.length);
 }
 
 async function renderRules(openIdx) {
@@ -232,6 +266,43 @@ $(function () {
         }
     });
 
+    function showBlocklistFeedback(message, isError) {
+        var $feedback = $('#blocklist-feedback');
+        if (!$feedback.length) {
+            return;
+        }
+        var baseClass = isError ? 'alert-danger' : 'alert-success';
+        $feedback.removeClass('alert-success alert-danger').addClass('alert ' + baseClass).text(message).stop(true, true).fadeIn(150);
+        setTimeout(function () {
+            $feedback.fadeOut(200);
+        }, 2000);
+    }
+
+    $('#blocklist-save-btn').click(async function () {
+        var rawInput = $('#blocklist-patterns').val().split(/\r?\n/);
+        blocklist = sanitizeBlocklist(rawInput);
+        try {
+            await saveBlocklist();
+            renderBlocklist();
+            showBlocklistFeedback('Blocklist updated.');
+        } catch (error) {
+            console.error('Failed to save blocklist', error);
+            showBlocklistFeedback('Failed to save blocklist.', true);
+        }
+    });
+
+    $('#blocklist-clear-btn').click(async function () {
+        blocklist = [];
+        try {
+            await saveBlocklist();
+            renderBlocklist();
+            showBlocklistFeedback('Blocklist cleared.');
+        } catch (error) {
+            console.error('Failed to clear blocklist', error);
+            showBlocklistFeedback('Failed to clear blocklist.', true);
+        }
+    });
+
     ///// Modals
     // cleanup helper function
     function bindCleanupOnImportModal() {
@@ -327,6 +398,7 @@ $(function () {
     });
 
     renderRules();
+    renderBlocklist();
 });
 
 $(function () {

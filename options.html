@@ -153,6 +153,7 @@
         <div class="col-sm-4">
             <ul id="tab-links" class="nav nav-tabs" role="tablist">
                 <li class="active"><a href="#tab-help" role="tab" data-toggle="tab">Help</a></li>
+                <li><a href="#tab-blocklist" role="tab" data-toggle="tab">Blocklist</a></li>
                 <li><a href="#tab-changelog" role="tab" data-toggle="tab">Changelog <span id="newBadge" class="badge" style="display:none;">New!</span></a></li>
                 <li><a href="#tab-about" role="tab" data-toggle="tab">About</a></li>
             </ul>
@@ -286,6 +287,23 @@
                         changing the <code>Content-Type</code> header to some unexpected MIME-type, e.g. <code>application/x-unknown-mime-type</code>.
                         Then you will be able to create a rule with a custom file extension in <b>destination path</b>.
                     </p>
+                </div>
+                <div class="tab-pane" id="tab-blocklist">
+                    <p>Enter regular expressions (one per line) to skip rule processing for matching downloads.</p>
+                    <div id="blocklist-feedback" class="alert alert-success" style="display:none;" role="alert"></div>
+                    <div class="form-group">
+                        <label for="blocklist-patterns">Blocked URL patterns</label>
+                        <textarea id="blocklist-patterns" class="form-control" rows="6" placeholder="^https?://example.com/"></textarea>
+                        <span id="blocklist-empty-hint" class="help-block text-muted" style="display:none;">No blocklist entries configured.</span>
+                        <span class="help-block">Patterns apply to the download URL, final URL, and referrer.</span>
+                    </div>
+                    <div class="btn-toolbar">
+                        <div class="btn-group">
+                            <button id="blocklist-save-btn" type="button" class="btn btn-primary">Save Blocklist</button>
+                            <button id="blocklist-clear-btn" type="button" class="btn btn-default">Clear</button>
+                        </div>
+                    </div>
+                    <p class="text-muted" style="margin-top:10px;">Active patterns: <span id="blocklist-count">0</span></p>
                 </div>
                 <div class="tab-pane" id="tab-changelog">
                     <h4>Version 0.4.1</h4>

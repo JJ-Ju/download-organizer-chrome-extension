@@ -37,6 +37,29 @@ function normalizeRulesets(rulesets) {
     return [];
 }
 
+function normalizeBlocklist(blocklist) {
+    if (!Array.isArray(blocklist)) {
+        if (blocklist !== undefined) {
+            console.warn('Blocklist missing or invalid, defaulting to empty array.');
+        }
+        return [];
+    }
+    return blocklist.filter((pattern) => typeof pattern === 'string' && pattern.trim().length);
+}
+
+function matchesBlocklist(patterns, fields) {
+    return patterns.some((pattern) => {
+        let regex;
+        try {
+            regex = new RegExp(pattern, 'i');
+        } catch (error) {
+            console.warn('Invalid blocklist regex skipped', { pattern, error });
+            return false;
+        }
+        return fields.some((value) => typeof value === 'string' && regex.test(value));
+    });
+}
+
 function ensureDownloadSession(downloadItem) {
     let session = downloadSessions.get(downloadItem.id);
     if (!session) {
@@ -85,8 +108,9 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
 
     console.log("Downloading item %o", downloadItem);
 
-    chrome.storage.local.get({ rulesets: [] }, ({ rulesets }) => {
+    chrome.storage.local.get({ rulesets: [], blocklist: [] }, ({ rulesets, blocklist }) => {
         const normalizedRules = normalizeRulesets(rulesets);
+        const normalizedBlocklist = normalizeBlocklist(blocklist);
         const item = {
             'mime': downloadItem.mime || '',
             'referrer': safeDecode(downloadItem.referrer),
@@ -100,6 +124,24 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
         const baselineFilename = session.initialFilename || '';
         const currentFilename = downloadItem.filename || '';
         session.lastKnownFilename = currentFilename;
+
+        const blocklistFields = [
+            item.url,
+            item.finalUrl,
+            item.referrer
+        ];
+
+        if (matchesBlocklist(normalizedBlocklist, blocklistFields)) {
+            console.log('Download skipped due to blocklist rule.', {
+                downloadId: downloadItem.id,
+                blocklistCount: normalizedBlocklist.length,
+                url: item.url,
+                finalUrl: item.finalUrl,
+                referrer: item.referrer
+            });
+            suggest();
+            return;
+        }
 
         if (!session.suggestedByUs && baselineFilename && currentFilename && baselineFilename !== currentFilename) {
             console.log('Filename already modified by another extension, skipping rename.', {
