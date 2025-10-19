@@ -80,6 +80,23 @@ function clearDownloadSession(downloadId) {
     downloadSessions.delete(downloadId);
 }
 
+function deferSuggestion(downloadItem, suggestFn) {
+    const current = (typeof downloadItem.filename === 'string' && downloadItem.filename.length)
+        ? downloadItem.filename
+        : undefined;
+    if (current) {
+        suggestFn({
+            filename: current,
+            conflictAction: DEFAULT_CONFLICT_ACTION
+        });
+    } else {
+        console.warn('No existing filename found when deferring suggestion; falling back to default.', {
+            downloadId: downloadItem.id
+        });
+        suggestFn();
+    }
+}
+
 chrome.downloads.onCreated.addListener((item) => {
     if (typeof item.id !== 'number') {
         return;
@@ -117,7 +134,7 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
                 downloadId: downloadItem.id,
                 url: downloadUrl
             });
-            suggest();
+            deferSuggestion(downloadItem, suggest);
             return;
         }
 
@@ -143,7 +160,7 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
                 baselineFilename: baselineFilename,
                 currentFilename: currentFilename
             });
-            suggest();
+            deferSuggestion(downloadItem, suggest);
             return;
         }
     
@@ -271,7 +288,7 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
             suggest(suggestion);
         } else {
             console.log("No matching rule was found")
-            suggest();
+            deferSuggestion(downloadItem, suggest);
         }
     });
 
