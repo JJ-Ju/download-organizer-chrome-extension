@@ -1,3 +1,6 @@
 .idea/
 *.iml
 key.pem
+dist/
+download-organizer.zip
+*.crx
