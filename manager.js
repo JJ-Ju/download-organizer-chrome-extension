@@ -14,37 +14,129 @@ const EXT_MIME_MAPPINGS = {
 const RULE_FIELDS = ['mime', 'referrer', 'url', 'finalUrl', 'filename'];
 const DATE_FIELD = 'date';
 const DEFAULT_CONFLICT_ACTION = 'uniquify';
+const VALID_CONFLICT_ACTIONS = new Set(['uniquify', 'overwrite', 'prompt']);
+const downloadSessions = new Map();
+
+function safeDecode(value) {
+    if (typeof value !== 'string' || value.length === 0) {
+        return value || '';
+    }
+    try {
+        return decodeURI(value);
+    } catch (error) {
+        console.warn('Failed to decode value, using raw string instead.', { value, error });
+        return value;
+    }
+}
+
+function normalizeRulesets(rulesets) {
+    if (Array.isArray(rulesets)) {
+        return rulesets;
+    }
+    console.warn('Rulesets missing or invalid, defaulting to empty array.');
+    return [];
+}
+
+function ensureDownloadSession(downloadItem) {
+    let session = downloadSessions.get(downloadItem.id);
+    if (!session) {
+        session = {};
+        downloadSessions.set(downloadItem.id, session);
+    }
+
+    if (session.initialFilename === undefined && typeof downloadItem.filename === 'string' && downloadItem.filename.length) {
+        session.initialFilename = downloadItem.filename;
+    }
+    if (typeof downloadItem.filename === 'string' && downloadItem.filename.length) {
+        session.lastKnownFilename = downloadItem.filename;
+    }
+    return session;
+}
+
+function clearDownloadSession(downloadId) {
+    downloadSessions.delete(downloadId);
+}
+
+chrome.downloads.onCreated.addListener((item) => {
+    if (typeof item.id !== 'number') {
+        return;
+    }
+    const session = ensureDownloadSession(item);
+    if (typeof item.filename === 'string' && item.filename.length) {
+        session.initialFilename = item.filename;
+    }
+});
+
+chrome.downloads.onChanged.addListener((delta) => {
+    const session = downloadSessions.get(delta.id);
+    if (session && delta.filename && typeof delta.filename.current === 'string') {
+        session.lastKnownFilename = delta.filename.current;
+    }
+    if (delta.state && (delta.state.current === 'complete' || delta.state.current === 'interrupted')) {
+        clearDownloadSession(delta.id);
+    }
+});
+
+chrome.downloads.onErased.addListener((downloadId) => {
+    clearDownloadSession(downloadId);
+});
 
 chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, suggest) {
 
     console.log("Downloading item %o", downloadItem);
 
-    chrome.storage.local.get(['rulesets'], ({ rulesets }) => {
-        var item = {
-            'mime': downloadItem.mime,
-            'referrer': decodeURI(downloadItem.referrer),
-            'url': decodeURI(downloadItem.url),
-            'finalUrl': decodeURI(downloadItem.finalUrl),
-            'filename': downloadItem.filename,
-            'startTime': new Date(downloadItem.startTime)
+    chrome.storage.local.get({ rulesets: [] }, ({ rulesets }) => {
+        const normalizedRules = normalizeRulesets(rulesets);
+        const item = {
+            'mime': downloadItem.mime || '',
+            'referrer': safeDecode(downloadItem.referrer),
+            'url': safeDecode(downloadItem.url),
+            'finalUrl': safeDecode(downloadItem.finalUrl || downloadItem.url),
+            'filename': downloadItem.filename || '',
+            'startTime': downloadItem.startTime ? new Date(downloadItem.startTime) : new Date()
         };
+
+        const session = ensureDownloadSession(downloadItem);
+        const baselineFilename = session.initialFilename || '';
+        const currentFilename = downloadItem.filename || '';
+        session.lastKnownFilename = currentFilename;
+
+        if (!session.suggestedByUs && baselineFilename && currentFilename && baselineFilename !== currentFilename) {
+            console.log('Filename already modified by another extension, skipping rename.', {
+                downloadId: downloadItem.id,
+                baselineFilename: baselineFilename,
+                currentFilename: currentFilename
+            });
+            suggest();
+            return;
+        }
     
         // Octet-stream workaround
-        if (downloadItem.mime == 'application/octet-stream') {
-            var matches = downloadItem.filename.match(/\.([0-9a-z]+)(?:[\?#]|$)/i);
-            var extension = matches && matches[1];
+        if (downloadItem.mime == 'application/octet-stream' && typeof downloadItem.filename === 'string') {
+            const matches = downloadItem.filename.match(/\.([0-9a-z]+)(?:[\?#]|$)/i);
+            const extension = matches && matches[1];
     
-            if (EXT_MIME_MAPPINGS[extension]) {
+            if (extension && EXT_MIME_MAPPINGS[extension]) {
                 item.mime = EXT_MIME_MAPPINGS[extension];
             }
         }
 
-        var suggestion = undefined;
+        let suggestion = undefined;
     
-        rulesets.every(function (rule) {
+        normalizedRules.every(function (rule) {
+            if (typeof rule !== 'object' || rule === null) {
+                console.warn('Skipping invalid rule entry:', rule);
+                return true;
+            }
+
             if (!rule.enabled) {
                 console.log("Rule disabled: %o", rule);
                 return true; // continue to the next rule
+            }
+
+            if (typeof rule.pattern !== 'string' || !rule.pattern.trim().length) {
+                console.warn('Skipping rule without a valid pattern:', rule);
+                return true;
             }
     
             var substitutions = {};
@@ -55,8 +147,15 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
                     return true; // skip this and continue to the next field
                 }
     
-                var regex = new RegExp(rule[field], 'i');
-                var matches = regex.exec(item[field]);
+                let regex;
+                try {
+                    regex = new RegExp(rule[field], 'i');
+                } catch (error) {
+                    console.warn('Invalid regex provided in rule field', { field: field, rule: rule, error: error });
+                    return false;
+                }
+
+                var matches = regex.exec(item[field] || '');
                 if (!matches) {
                     return false; // rule failed, break
                 }
@@ -72,9 +171,9 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
     
             console.log("Rule matched: %o", rule);
     
-            var result = true;
+            let result = true;
     
-            var filename = rule['pattern'].replace(/\$\{(\w+)(?::(.+?))?\}/g, function (orig, field, idx) {
+            let filename = rule['pattern'].replace(/\$\{(\w+)(?::(.+?))?\}/g, function (orig, field, idx) {
                 if (field === DATE_FIELD) {
                     if (idx) {
                         return moment(item.startTime).format(idx);
@@ -108,16 +207,25 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
             // remove trailing slashes
             filename = filename.replace(/^\/+/, '');
     
-            var conflictAction = rule['conflict-action'];
-            if (!conflictAction) {
+            let conflictAction = rule['conflict-action'];
+            if (!VALID_CONFLICT_ACTIONS.has(conflictAction)) {
                 conflictAction = DEFAULT_CONFLICT_ACTION;
             }
     
             if (result) {
+                if (filename === currentFilename) {
+                    console.log('Filename already matches desired value; skipping suggestion.', {
+                        downloadId: downloadItem.id,
+                        filename: filename
+                    });
+                    return true;
+                }
                 suggestion = {
                     filename: filename,
                     conflictAction: conflictAction
                 };
+                session.suggestedByUs = true;
+                session.lastKnownFilename = filename;
                 return false; // suggestion found, do not continue to the next rule
             }
         });
