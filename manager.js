@@ -60,23 +60,6 @@ function matchesBlocklist(patterns, fields) {
     });
 }
 
-function evaluateBlocklistForUrl(downloadId, url) {
-    if (typeof url !== 'string' || !url.length) {
-        return;
-    }
-    chrome.storage.local.get({ blocklist: [] }, ({ blocklist }) => {
-        const normalizedBlocklist = normalizeBlocklist(blocklist);
-        const session = downloadSessions.get(downloadId);
-        if (!session) {
-            return;
-        }
-        if (matchesBlocklist(normalizedBlocklist, [url])) {
-            session.blocklisted = true;
-            session.blocklistedUrl = url;
-        }
-    });
-}
-
 function ensureDownloadSession(downloadItem) {
     let session = downloadSessions.get(downloadItem.id);
     if (!session) {
@@ -121,19 +104,12 @@ chrome.downloads.onCreated.addListener((item) => {
     if (typeof item.filename === 'string' && item.filename.length) {
         session.initialFilename = item.filename;
     }
-    evaluateBlocklistForUrl(item.id, item.url);
 });
 
 chrome.downloads.onChanged.addListener((delta) => {
     const session = downloadSessions.get(delta.id);
     if (session && delta.filename && typeof delta.filename.current === 'string') {
         session.lastKnownFilename = delta.filename.current;
-    }
-    if (delta.url && typeof delta.url.current === 'string') {
-        evaluateBlocklistForUrl(delta.id, delta.url.current);
-    }
-    if (delta.finalUrl && typeof delta.finalUrl.current === 'string') {
-        evaluateBlocklistForUrl(delta.id, delta.finalUrl.current);
     }
     if (delta.state && (delta.state.current === 'complete' || delta.state.current === 'interrupted')) {
         clearDownloadSession(delta.id);
@@ -148,29 +124,14 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
 
     console.log("Downloading item %o", downloadItem);
 
-    const session = ensureDownloadSession(downloadItem);
-    if (session.blocklisted) {
-        console.log('Download skipped due to blocklist rule (cached).', {
-            downloadId: downloadItem.id,
-            url: session.blocklistedUrl || downloadItem.url
-        });
-        deferSuggestion(downloadItem, suggest);
-        return;
-    }
-
     chrome.storage.local.get({ rulesets: [], blocklist: [] }, ({ rulesets, blocklist }) => {
         const normalizedBlocklist = normalizeBlocklist(blocklist);
         const downloadUrl = typeof downloadItem.url === 'string' ? downloadItem.url : '';
 
-        if (!session.blocklisted && matchesBlocklist(normalizedBlocklist, [downloadUrl])) {
-            session.blocklisted = true;
-            session.blocklistedUrl = downloadUrl;
-        }
-
-        if (session.blocklisted) {
+        if (matchesBlocklist(normalizedBlocklist, [downloadUrl])) {
             console.log('Download skipped due to blocklist rule.', {
                 downloadId: downloadItem.id,
-                url: session.blocklistedUrl || downloadUrl
+                url: downloadUrl
             });
             deferSuggestion(downloadItem, suggest);
             return;
@@ -178,6 +139,7 @@ chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, sugge
 
         const normalizedRules = normalizeRulesets(rulesets);
 
+        const session = ensureDownloadSession(downloadItem);
         const baselineFilename = session.initialFilename || '';
         const currentFilename = downloadItem.filename || '';
         session.lastKnownFilename = currentFilename;
