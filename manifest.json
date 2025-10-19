@@ -13,6 +13,13 @@
     "64": "icons/icon64.png",
     "128": "icons/icon128.png"
   },
+  "action": {
+    "default_title": "RegExp Download Organizer",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
   "permissions": [
     "downloads",
     "storage",

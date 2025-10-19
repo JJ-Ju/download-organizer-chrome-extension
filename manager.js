@@ -16,6 +16,7 @@ const DATE_FIELD = 'date';
 const DEFAULT_CONFLICT_ACTION = 'uniquify';
 const VALID_CONFLICT_ACTIONS = new Set(['uniquify', 'overwrite', 'prompt']);
 const downloadSessions = new Map();
+let isExtensionEnabled = true;
 
 function safeDecode(value) {
     if (typeof value !== 'string' || value.length === 0) {
@@ -59,6 +60,35 @@ function matchesBlocklist(patterns, fields) {
         return fields.some((value) => typeof value === 'string' && regex.test(value));
     });
 }
+
+function applyEnabledState(enabled) {
+    isExtensionEnabled = enabled;
+    const badgeText = enabled ? '' : 'OFF';
+    const badgeColor = enabled ? '#28a745' : '#d9534f';
+    chrome.action.setBadgeText({ text: badgeText });
+    chrome.action.setBadgeBackgroundColor({ color: badgeColor });
+    chrome.action.setTitle({
+        title: enabled ? 'RegExp Download Organizer (click to disable)' : 'RegExp Download Organizer (click to enable)'
+    });
+}
+
+applyEnabledState(true);
+
+chrome.storage.local.get({ extensionEnabled: true }, ({ extensionEnabled }) => {
+    applyEnabledState(extensionEnabled !== false);
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !Object.prototype.hasOwnProperty.call(changes, 'extensionEnabled')) {
+        return;
+    }
+    applyEnabledState(changes.extensionEnabled.newValue !== false);
+});
+
+chrome.action.onClicked.addListener(() => {
+    const nextEnabledState = !isExtensionEnabled;
+    chrome.storage.local.set({ extensionEnabled: nextEnabledState });
+});
 
 function ensureDownloadSession(downloadItem) {
     let session = downloadSessions.get(downloadItem.id);
@@ -122,6 +152,15 @@ chrome.downloads.onErased.addListener((downloadId) => {
 });
 
 chrome.downloads.onDeterminingFilename.addListener(function (downloadItem, suggest) {
+
+    if (!isExtensionEnabled) {
+        console.log('Download organizer disabled via toolbar toggle, deferring rename.', {
+            downloadId: downloadItem.id,
+            filename: downloadItem.filename
+        });
+        deferSuggestion(downloadItem, suggest);
+        return;
+    }
 
     console.log("Downloading item %o", downloadItem);
 
